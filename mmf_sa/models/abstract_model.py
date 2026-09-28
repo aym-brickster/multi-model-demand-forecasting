@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 import cloudpickle
-from typing import Dict, Union
+from typing import Dict, List, Optional, Tuple, Union
 from sklearn.base import BaseEstimator, RegressorMixin
 from sktime.performance_metrics.forecasting import (
     MeanAbsoluteError,
@@ -61,6 +61,48 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
             None
         )
 
+    # ── Prediction interval helpers ──────────────────────────────────────
+
+    def _get_interval_level(self) -> Optional[float]:
+        """Return the prediction interval level (e.g. 0.95) or None if disabled."""
+        level = self.params.get("prediction_interval_level", None)
+        if level is not None and 0 < float(level) < 1:
+            return float(level)
+        return None
+
+    def _get_interval_level_pct(self) -> Optional[int]:
+        """Return the interval level as an integer percentage (e.g. 95) for
+        libraries that use that convention (StatsForecast)."""
+        level = self._get_interval_level()
+        return int(round(level * 100)) if level is not None else None
+
+    @staticmethod
+    def compute_conformal_intervals(
+        all_residuals: np.ndarray,
+        forecast: np.ndarray,
+        level: float,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute conformal prediction intervals from accumulated backtest residuals.
+
+        Uses the distribution-free split-conformal method: the interval half-width
+        is the (1 - alpha) quantile of the absolute residuals collected from
+        *previous* backtest windows.
+
+        Args:
+            all_residuals: 1-D array of absolute residuals from prior windows.
+            forecast: 1-D array of point forecasts for the current window.
+            level: Confidence level (e.g. 0.95).
+
+        Returns:
+            (lower, upper) arrays the same length as *forecast*.
+        """
+        if len(all_residuals) == 0:
+            # First window — no prior residuals; return NaNs
+            nans = np.full_like(forecast, np.nan, dtype=float)
+            return nans, nans
+        q = np.quantile(np.abs(all_residuals), level)
+        return forecast - q, forecast + q
+
     @abstractmethod
     def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
         return df
@@ -87,13 +129,9 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
     ) -> pd.DataFrame:
         """
         Performs backtesting using the provided pandas DataFrame, start timestamp, group id, stride and SparkSession.
-        Parameters:
-            self (Forecaster): A Forecaster object.
-            df (pd.DataFrame): A pandas DataFrame.
-            start (pd.Timestamp): A pandas Timestamp object.
-            group_id (Union[str, int], optional): A string or an integer specifying the group id. Default is None.
-            spark (SparkSession, optional): A SparkSession object. Default is None.
-        Returns: res_df (pd.DataFrame): A pandas DataFrame.
+        When prediction_interval_level is set, also produces forecast_lower and forecast_upper.
+        Native intervals are used when the model provides them; otherwise conformal prediction
+        intervals are computed from the accumulated backtest residuals.
         """
         stride = int(self.params["stride"]) # Read in stride
         stride_offset = (
@@ -107,12 +145,12 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
         end_date = df[self.params["date_col"]].max() # Last date from the training data
         # Offsets the timestamp: e.g. if it's in the middle of the month for a monthly time series, makes it the end of the month
         curr_date = start + self.one_ts_offset
-        # print("end_date = ", end_date)
 
+        interval_level = self._get_interval_level()
+        accumulated_residuals: List[float] = []  # for conformal fallback
         results = []
 
         while curr_date + self.prediction_length_offset <= end_date + self.one_ts_offset:
-            # print("start_date = ", curr_date)
             _df = df[df[self.params["date_col"]] < np.datetime64(curr_date)]
             actuals_df = df[
                 (df[self.params["date_col"]] >= np.datetime64(curr_date))
@@ -121,27 +159,62 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
                         < np.datetime64(curr_date + self.prediction_length_offset)
                 )]
 
-            # backtest_retrain for global models is currently not supported
-            # if backtest_retrain and self.params["model_type"] == "global":
-            #    self.fit(_df)
-
             metrics = self.calculate_metrics(_df, actuals_df, curr_date, spark)
 
             if isinstance(metrics, dict):
+                forecast_arr = metrics["forecast"]
+                actual_arr = metrics["actual"]
+
+                # Determine interval bounds
+                forecast_lower = metrics.get("forecast_lower", None)
+                forecast_upper = metrics.get("forecast_upper", None)
+
+                if interval_level is not None:
+                    if forecast_lower is None or forecast_upper is None:
+                        # No native intervals — use conformal prediction
+                        forecast_lower, forecast_upper = self.compute_conformal_intervals(
+                            np.array(accumulated_residuals), forecast_arr, interval_level
+                        )
+                    # Accumulate residuals for future conformal windows
+                    accumulated_residuals.extend(
+                        np.abs(actual_arr.astype(float) - forecast_arr.astype(float)).tolist()
+                    )
+
                 evaluation_results = [
                     (
                         group_id,
                         metrics["curr_date"],
                         metrics["metric_name"],
                         metrics["metric_value"],
-                        metrics["forecast"],
-                        metrics["actual"],
+                        forecast_arr,
+                        actual_arr,
                         metrics["model_pickle"],
+                        forecast_lower if forecast_lower is not None else np.array([]),
+                        forecast_upper if forecast_upper is not None else np.array([]),
                     )
                 ]
                 results.extend(evaluation_results)
             elif isinstance(metrics, list):
-                results.extend(metrics)
+                # Global / NeuralForecast models return a list of tuples
+                for m in metrics:
+                    if interval_level is not None and len(m) == 7:
+                        # Tuple without intervals — add conformal
+                        _, _, _, _, f_arr, a_arr, _ = m
+                        f_lower, f_upper = self.compute_conformal_intervals(
+                            np.array(accumulated_residuals),
+                            np.asarray(f_arr, dtype=float),
+                            interval_level,
+                        )
+                        accumulated_residuals.extend(
+                            np.abs(np.asarray(a_arr, dtype=float) - np.asarray(f_arr, dtype=float)).tolist()
+                        )
+                        results.append(m + (f_lower, f_upper))
+                    elif len(m) >= 9:
+                        # Already has intervals
+                        results.append(m)
+                    else:
+                        # No intervals requested — pass through with empty arrays
+                        results.append(m + (np.array([]), np.array([])))
 
             curr_date += stride_offset
 
@@ -153,7 +226,9 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
                      "metric_value",
                      "forecast",
                      "actual",
-                     "model_pickle"],
+                     "model_pickle",
+                     "forecast_lower",
+                     "forecast_upper"],
         )
 
         return res_df
@@ -202,10 +277,18 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
         else:
             raise UnsupportedMetricError(f"Metric {self.params['metric']} not supported!")
 
-        return {
+        result = {
             "curr_date": curr_date,
             "metric_name": self.params["metric"],
             "metric_value": metric_value,
             "forecast": pred_df[self.params["target"]].to_numpy("float"),
             "actual": val_df[self.params["target"]].to_numpy(),
-            "model_pickle": cloudpickle.dumps(model_fitted)}
+            "model_pickle": cloudpickle.dumps(model_fitted),
+        }
+
+        # Pass through native prediction intervals if the model provided them
+        if "forecast_lower" in pred_df.columns and "forecast_upper" in pred_df.columns:
+            result["forecast_lower"] = pred_df["forecast_lower"].to_numpy("float")
+            result["forecast_upper"] = pred_df["forecast_upper"].to_numpy("float")
+
+        return result

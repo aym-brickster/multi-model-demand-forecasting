@@ -369,6 +369,12 @@ class NeuralFcForecaster(ForecastingRegressor):
         )
         if not self.params.get("allow_negative_values", False):
             forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+
+        # Map native quantile columns to forecast_lower/forecast_upper if present
+        interval_level = self._get_interval_level()
+        if interval_level is not None:
+            self._map_neuralforecast_intervals(forecast_df, target, interval_level)
+
         return forecast_df, self.model
 
     def forecast(self, df: pd.DataFrame, spark=None):
@@ -403,7 +409,36 @@ class NeuralFcForecaster(ForecastingRegressor):
         )
         if not self.params.get("allow_negative_values", False):
             forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+
+        # Map native quantile columns to forecast_lower/forecast_upper if present
+        interval_level = self._get_interval_level()
+        if interval_level is not None:
+            self._map_neuralforecast_intervals(forecast_df, target, interval_level)
+
         return forecast_df, self.model
+
+    @staticmethod
+    def _map_neuralforecast_intervals(forecast_df, target, interval_level):
+        """Map NeuralForecast quantile columns to forecast_lower/forecast_upper.
+
+        NeuralForecast models trained with quantile loss produce columns like
+        '<ModelName>-ql0.025' and '<ModelName>-ql0.975' for a 95% interval.
+        This method searches for those columns and renames them.
+        """
+        alpha = 1 - interval_level
+        lo_q = alpha / 2       # e.g. 0.025
+        hi_q = 1 - alpha / 2   # e.g. 0.975
+
+        lo_col = hi_col = None
+        for col in forecast_df.columns:
+            col_lower = col.lower()
+            if f"ql{lo_q}" in col_lower or f"-lo-{int(interval_level*100)}" in col_lower:
+                lo_col = col
+            elif f"ql{hi_q}" in col_lower or f"-hi-{int(interval_level*100)}" in col_lower:
+                hi_col = col
+
+        if lo_col and hi_col:
+            forecast_df.rename(columns={lo_col: "forecast_lower", hi_col: "forecast_upper"}, inplace=True)
 
     def calculate_metrics(
         self, hist_df: pd.DataFrame, val_df: pd.DataFrame, curr_date, spark=None

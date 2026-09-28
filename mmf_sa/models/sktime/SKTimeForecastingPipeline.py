@@ -67,9 +67,8 @@ class SKTimeForecastingPipeline(ForecastingRegressor):
     def predict(self, hist_df: pd.DataFrame, val_df: pd.DataFrame = None):
         _df = self.prepare_data(hist_df)
         self.fit(_df)
-        pred_df = self.model.predict(
-            ForecastingHorizon(np.arange(1, self.params.prediction_length + 1))
-        )
+        fh = ForecastingHorizon(np.arange(1, self.params.prediction_length + 1))
+        pred_df = self.model.predict(fh)
         freq = self.params.freq
         if freq == "H":
             freq = "h"
@@ -85,6 +84,25 @@ class SKTimeForecastingPipeline(ForecastingRegressor):
         forecast_df[self.params.target] = pred_df.y.values
         if not self.params.get("allow_negative_values", False):
             forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+
+        # Native prediction intervals via predict_interval (Prophet supports this)
+        interval_level = self._get_interval_level()
+        if interval_level is not None:
+            try:
+                pi_df = self.model.predict_interval(fh, coverage=[interval_level])
+                # predict_interval returns MultiIndex columns: (var, coverage, bound)
+                # e.g. ('y', 0.95, 'lower') and ('y', 0.95, 'upper')
+                lower_col = ("y", interval_level, "lower")
+                upper_col = ("y", interval_level, "upper")
+                if lower_col in pi_df.columns and upper_col in pi_df.columns:
+                    forecast_df["forecast_lower"] = pi_df[lower_col].values
+                    forecast_df["forecast_upper"] = pi_df[upper_col].values
+                    if not self.params.get("allow_negative_values", False):
+                        forecast_df["forecast_lower"] = forecast_df["forecast_lower"].clip(0)
+            except Exception:
+                # Model doesn't support predict_interval; conformal fallback will be used
+                pass
+
         return forecast_df, self.model
 
     def forecast(self, x, spark=None):

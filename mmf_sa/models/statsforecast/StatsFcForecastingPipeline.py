@@ -89,28 +89,55 @@ class StatsFcForecaster(ForecastingRegressor):
         _df = self.prepare_data(hist_df)
         _exogenous = self.prepare_data(val_df, future=True)
         self.fit(_df)
+
+        # Determine if native prediction intervals are requested
+        interval_pct = self._get_interval_level_pct()
+        predict_kwargs = {"h": self.params["prediction_length"]}
+        if interval_pct is not None:
+            predict_kwargs["level"] = [interval_pct]
+
         if len(_exogenous.columns) == 2:
-            forecast_df = self.model.predict(self.params["prediction_length"])
+            forecast_df = self.model.predict(**predict_kwargs)
         else:
-            forecast_df = self.model.predict(self.params["prediction_length"], _exogenous)
+            forecast_df = self.model.predict(**predict_kwargs, X_df=_exogenous)
+
+        # Identify the point-forecast column (not unique_id, ds, or lo-/hi-)
         target = [col for col in forecast_df.columns.to_list()
-                       if col not in ["unique_id", "ds"]][0]
-        forecast_df = forecast_df.reset_index(drop=True).rename(
-            columns={
-                "unique_id": self.params.group_id,
-                "ds": self.params.date_col,
-                target: self.params.target,
-            }
-        )
-        # Fix here
+                       if col not in ["unique_id", "ds"]
+                       and not col.startswith("lo-")
+                       and not col.startswith("hi-")][0]
+
+        rename_map = {
+            "unique_id": self.params.group_id,
+            "ds": self.params.date_col,
+            target: self.params.target,
+        }
+        # Map native interval columns if present
+        if interval_pct is not None:
+            lo_col = f"lo-{interval_pct}"
+            hi_col = f"hi-{interval_pct}"
+            if lo_col in forecast_df.columns and hi_col in forecast_df.columns:
+                rename_map[lo_col] = "forecast_lower"
+                rename_map[hi_col] = "forecast_upper"
+
+        forecast_df = forecast_df.reset_index(drop=True).rename(columns=rename_map)
+
         if not self.params.get("allow_negative_values", False):
             forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+            if "forecast_lower" in forecast_df.columns:
+                forecast_df["forecast_lower"] = forecast_df["forecast_lower"].clip(0)
         return forecast_df, self.model
 
     def forecast(self, df: pd.DataFrame, spark=None):
         _df = df[df[self.params.target].notnull()]
         _df = self.prepare_data(_df)
         self.fit(_df)
+
+        interval_pct = self._get_interval_level_pct()
+        predict_kwargs = {"h": self.params["prediction_length"]}
+        if interval_pct is not None:
+            predict_kwargs["level"] = [interval_pct]
+
         if 'dynamic_future_numerical' in self.params.keys() or 'dynamic_future_categorical' in self.params.keys():
             _last_date = _df["ds"].max()
             _future_df = df[
@@ -120,7 +147,7 @@ class StatsFcForecaster(ForecastingRegressor):
             ]
             _future_exogenous = self.prepare_data(_future_df, future=True)
             try:
-                forecast_df = self.model.predict(self.params["prediction_length"], _future_exogenous)
+                forecast_df = self.model.predict(**predict_kwargs, X_df=_future_exogenous)
             except Exception as e:
                 print(
                     f"Removing group_id {df[self.params.group_id][0]} as future exogenous "
@@ -129,19 +156,31 @@ class StatsFcForecaster(ForecastingRegressor):
                     columns=[self.params.date_col, self.params.target]
                 )
         else:
-            forecast_df = self.model.predict(self.params["prediction_length"])
+            forecast_df = self.model.predict(**predict_kwargs)
 
-        target = [col for col in forecast_df.columns.to_list() if col not in ["unique_id", "ds"]][0]
-        forecast_df = forecast_df.reset_index(drop=True).rename(
-            columns={
-                "unique_id": self.params.group_id,
-                "ds": self.params.date_col,
-                target: self.params.target,
-            }
-        )
-        # Fix here
+        target = [col for col in forecast_df.columns.to_list()
+                  if col not in ["unique_id", "ds"]
+                  and not col.startswith("lo-")
+                  and not col.startswith("hi-")][0]
+
+        rename_map = {
+            "unique_id": self.params.group_id,
+            "ds": self.params.date_col,
+            target: self.params.target,
+        }
+        if interval_pct is not None:
+            lo_col = f"lo-{interval_pct}"
+            hi_col = f"hi-{interval_pct}"
+            if lo_col in forecast_df.columns and hi_col in forecast_df.columns:
+                rename_map[lo_col] = "forecast_lower"
+                rename_map[hi_col] = "forecast_upper"
+
+        forecast_df = forecast_df.reset_index(drop=True).rename(columns=rename_map)
+
         if not self.params.get("allow_negative_values", False):
             forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+            if "forecast_lower" in forecast_df.columns:
+                forecast_df["forecast_lower"] = forecast_df["forecast_lower"].clip(0)
         return forecast_df, self.model
 
 

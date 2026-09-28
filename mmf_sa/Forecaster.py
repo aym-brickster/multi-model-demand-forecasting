@@ -257,6 +257,8 @@ class Forecaster:
                     StructField("forecast", ArrayType(DoubleType())),
                     StructField("actual", ArrayType(DoubleType())),
                     StructField("model_pickle", BinaryType()),
+                    StructField("forecast_lower", ArrayType(DoubleType())),
+                    StructField("forecast_upper", ArrayType(DoubleType())),
                 ]
             )
 
@@ -441,11 +443,19 @@ class Forecaster:
                 StructField("forecast", ArrayType(DoubleType())),
                 StructField("actual", ArrayType(DoubleType())),
                 StructField("model_pickle", BinaryType()),
+                StructField("forecast_lower", ArrayType(DoubleType())),
+                StructField("forecast_upper", ArrayType(DoubleType())),
             ]
         )
         # Covert to Python-native types before converting to pyspark dataframe
         res_pdf['forecast'] = res_pdf['forecast'].apply(lambda x: [float(i) for i in x])
         res_pdf['actual'] = res_pdf['actual'].apply(lambda x: [float(i) for i in x])
+        res_pdf['forecast_lower'] = res_pdf['forecast_lower'].apply(
+            lambda x: [float(i) for i in x] if hasattr(x, '__iter__') and len(x) > 0 else []
+        )
+        res_pdf['forecast_upper'] = res_pdf['forecast_upper'].apply(
+            lambda x: [float(i) for i in x] if hasattr(x, '__iter__') and len(x) > 0 else []
+        )
         res_sdf = self.spark.createDataFrame(res_pdf, schema)
         # Write evaluation results to a delta table
         if write:
@@ -572,6 +582,8 @@ class Forecaster:
                 StructField(self.conf["date_col"], ArrayType(TimestampType())),
                 StructField(self.conf["target"], ArrayType(DoubleType())),
                 StructField("model_pickle", BinaryType()),
+                StructField("forecast_lower", ArrayType(DoubleType())),
+                StructField("forecast_upper", ArrayType(DoubleType())),
             ]
         )
         model = self.model_registry.get_model(model_conf["name"])
@@ -613,31 +625,38 @@ class Forecaster:
         group_id = pdf[model.params["group_id"]].iloc[0]
         res_df, model_fitted = model.forecast(pdf)
         try:
+            # Extract interval columns if present
+            lower = res_df["forecast_lower"].to_numpy() if "forecast_lower" in res_df.columns else np.array([])
+            upper = res_df["forecast_upper"].to_numpy() if "forecast_upper" in res_df.columns else np.array([])
             data = [
                 group_id,
                 res_df[model.params["date_col"]].to_numpy(),
                 res_df[model.params["target"]].to_numpy(),
-                cloudpickle.dumps(model_fitted)]
+                cloudpickle.dumps(model_fitted),
+                lower,
+                upper]
         except (ModelError, ScoringError, DataError) as err:
             _logger.error(
                 f"Error scoring group {group_id} using model {repr(model)}: {err}",
                 exc_info=err,
                 stack_info=True,
             )
-            data = [group_id, None, None, None]
+            data = [group_id, None, None, None, np.array([]), np.array([])]
         except Exception as err:
             _logger.error(
                 f"Unexpected error scoring group {group_id} using model {repr(model)}: {err}",
                 exc_info=err,
                 stack_info=True,
             )
-            data = [group_id, None, None, None]
+            data = [group_id, None, None, None, np.array([]), np.array([])]
         res_df = pd.DataFrame(
             columns=[
                 model.params["group_id"],
                 model.params["date_col"],
                 model.params["target"],
-                "model_pickle"], data=[data]
+                "model_pickle",
+                "forecast_lower",
+                "forecast_upper"], data=[data]
         )
         return res_df
 

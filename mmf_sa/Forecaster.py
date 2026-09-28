@@ -341,7 +341,8 @@ class Forecaster:
         )
         try:
             pdf = pdf.fillna(0)
-            pdf[model.params["target"]] = pdf[model.params["target"]].clip(0)
+            if not model.params.get("allow_negative_values", False):
+                pdf[model.params["target"]] = pdf[model.params["target"]].clip(0)
             metrics_df = model.backtest(pdf, start=split_date, group_id=group_id)
             return metrics_df
         except (ModelError, EvaluationError, DataError) as err:

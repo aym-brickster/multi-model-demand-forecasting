@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import logging
 import numpy as np
 import pandas as pd
 import cloudpickle
@@ -11,6 +12,8 @@ from sktime.performance_metrics.forecasting import (
 )
 import mlflow
 from mmf_sa.exceptions import UnsupportedMetricError
+
+_logger = logging.getLogger(__name__)
 mlflow.set_registry_uri("databricks-uc")
 
 MMF_PACKAGE = "git+https://github.com/databricks-industry-solutions/many-model-forecasting.git"
@@ -172,6 +175,14 @@ class ForecastingRegressor(BaseEstimator, RegressorMixin):
         
         actual = val_df[self.params["target"]].to_numpy()
         forecast = pred_df[self.params["target"]].to_numpy()
+
+        # Warn if MAPE/sMAPE is used with data that contains negative or zero values
+        if self.params.get("allow_negative_values", False) and self.params["metric"] in ("mape", "smape"):
+            if np.any(actual == 0) or np.any(actual < 0):
+                _logger.warning(
+                    f"Metric '{self.params['metric']}' may produce unreliable results with "
+                    f"negative or zero actual values. Consider using 'mae', 'mse', or 'rmse' instead."
+                )
 
         if self.params["metric"] == "smape":
             smape = MeanAbsolutePercentageError(symmetric=True)

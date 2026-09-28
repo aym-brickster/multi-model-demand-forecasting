@@ -6,6 +6,11 @@ resample: false
 
 train_predict_ratio: 1
 
+# Set to true to support forecasting time series with negative values.
+# When false (default), negative values are clipped to 0 and series with
+# excessive negative entries are removed during data quality checks.
+allow_negative_values: false
+
 accelerator: cpu
 
 static_features:

@@ -283,7 +283,11 @@ class DataQualityChecks:
             ValidationResult with check outcome
         """
         # Filter to positive values for training period calculation
-        temp_df = df[df[self.conf["target"]] > 0]
+        # When allow_negative_values is enabled, use all data points
+        if self.conf.get("allow_negative_values", False):
+            temp_df = df[df[self.conf["target"]].notna()]
+        else:
+            temp_df = df[df[self.conf["target"]] > 0]
         
         # Calculate backtest offset using utility
         backtest_offset = DateOffsetUtility.get_backtest_offset(
@@ -437,12 +441,13 @@ class DataQualityChecks:
                 self.metrics.add_removal_reason(f"error in {check_name} check")
                 return pd.DataFrame()
         
-        # Check negative entries on final processed data
-        negative_result = self._check_negative_entries(processed_df, group_id)
-        if not negative_result.is_valid:
-            self.metrics.removed_groups += 1
-            self.metrics.add_removal_reason(negative_result.reason)
-            return pd.DataFrame()
+        # Check negative entries on final processed data (skip when negative values are allowed)
+        if not self.conf.get("allow_negative_values", False):
+            negative_result = self._check_negative_entries(processed_df, group_id)
+            if not negative_result.is_valid:
+                self.metrics.removed_groups += 1
+                self.metrics.add_removal_reason(negative_result.reason)
+                return pd.DataFrame()
         
         return processed_df
 

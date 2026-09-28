@@ -28,7 +28,8 @@ class SKTimeForecastingPipeline(ForecastingRegressor):
 
     def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy().fillna(0)
-        df[self.params.target] = df[self.params.target].clip(0)
+        if not self.params.get("allow_negative_values", False):
+            df[self.params.target] = df[self.params.target].clip(0)
         freq = self.params.freq
         if freq == "H":
             freq = "h"
@@ -82,7 +83,8 @@ class SKTimeForecastingPipeline(ForecastingRegressor):
         )
         forecast_df = pd.DataFrame(data=[], index=date_idx).reset_index()
         forecast_df[self.params.target] = pred_df.y.values
-        forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+        if not self.params.get("allow_negative_values", False):
+            forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
         return forecast_df, self.model
 
     def forecast(self, x, spark=None):

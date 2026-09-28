@@ -70,7 +70,8 @@ class NeuralFcForecaster(ForecastingRegressor):
     def prepare_data(self, df: pd.DataFrame, future: bool = False) -> pd.DataFrame:
         if not future:
             # Prepare historical dataframe with or without exogenous regressors for training
-            df[self.params.target] = df[self.params.target].clip(0)
+            if not self.params.get("allow_negative_values", False):
+                df[self.params.target] = df[self.params.target].clip(0)
             features = [self.params.group_id, self.params.date_col, self.params.target]
             if 'dynamic_future_numerical' in self.params.keys():
                 try:
@@ -366,7 +367,8 @@ class NeuralFcForecaster(ForecastingRegressor):
                 target: self.params.target,
             }
         )
-        forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+        if not self.params.get("allow_negative_values", False):
+            forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
         return forecast_df, self.model
 
     def forecast(self, df: pd.DataFrame, spark=None):
@@ -399,7 +401,8 @@ class NeuralFcForecaster(ForecastingRegressor):
                 target: self.params.target,
             }
         )
-        forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+        if not self.params.get("allow_negative_values", False):
+            forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
         return forecast_df, self.model
 
     def calculate_metrics(

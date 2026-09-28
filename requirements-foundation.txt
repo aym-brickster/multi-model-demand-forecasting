@@ -1,0 +1,4 @@
+-r requirements.txt
+timesfm[torch,xreg] @ git+https://github.com/google-research/timesfm.git@a83dbf3f163cf15993dac6a45bbb5dcb160e14e8
+chronos-forecasting==2.2.2
+utilsforecast==0.2.15

@@ -1,0 +1,53 @@
+[project]
+name = "mmf_sa"
+version = "0.0.1"
+dependencies = [
+    "omegaconf==2.3.0",
+    "sktime==0.40.1",
+    "mlflow>=3.1.4",
+]
+
+[project.optional-dependencies]
+local = [
+    "statsforecast==2.0.0",
+    "prophet==1.1.6",
+]
+global = [
+    "pandas==2.2.3",
+    "neuralforecast==3.1.4",
+]
+foundation = [
+    "timesfm[torch,xreg] @ git+https://github.com/google-research/timesfm.git@a83dbf3f163cf15993dac6a45bbb5dcb160e14e8",
+    "chronos-forecasting==2.2.2",
+    "utilsforecast==0.2.15",
+]
+tests = [
+    "setuptools",
+    "wheel",
+    "pyyaml",
+    "pytest",
+    "pytest-cov",
+    "pyspark==3.3.0",
+    "PyArrow>=1.0.0",
+    "sqlalchemy",
+    "alembic",
+    "hyperopt",
+    "plotly",
+    "black",
+    "datasetsforecast",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "mmf_sa/",
+]
+exclude = [
+    "/tests",
+]

@@ -1,0 +1,111 @@
+from abc import abstractmethod
+import numpy as np
+import pandas as pd
+from typing import Dict, Any, Union
+from sktime.forecasting.model_selection import (
+    SlidingWindowSplitter,
+    ForecastingGridSearchCV,
+)
+from sktime.forecasting.fbprophet import Prophet
+from sktime.forecasting.base import ForecastingHorizon, BaseForecaster
+from mmf_sa.models.abstract_model import ForecastingRegressor
+
+
+class SKTimeForecastingPipeline(ForecastingRegressor):
+    def __init__(self, params):
+        super().__init__(params)
+        self.params = params
+        self.model_spec = self.params.model_spec
+        self.model = None
+        self.param_grid = self.create_param_grid()
+
+    @abstractmethod
+    def create_model(self) -> BaseForecaster:
+        pass
+
+    def create_param_grid(self) -> Dict[str, Any]:
+        return {}
+
+    def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy().fillna(0)
+        df[self.params.target] = df[self.params.target].clip(0)
+        freq = self.params.freq
+        if freq == "H":
+            freq = "h"
+        elif freq == "M":
+            freq = "ME"
+        date_idx = pd.date_range(
+            start=df[self.params.date_col].min(),
+            end=df[self.params.date_col].max(),
+            freq=freq,
+            name=self.params.date_col,
+        )
+        df = df.set_index(self.params.date_col)
+        df = df.reindex(date_idx, method="backfill")
+        df = df.sort_index()
+        df = pd.DataFrame({"y": df[self.params.target].values}, index=df.index.to_period(self.params.freq))
+        return df
+
+    def fit(self, x, y=None):
+        if (self.params.get("enable_gcv", False)
+                and self.model is None
+                and self.param_grid):
+            _model = self.create_model()
+            cv = SlidingWindowSplitter(
+                initial_window=int(len(x) - self.params.prediction_length * 4),
+                window_length=self.params.prediction_length * 10,
+                step_length=int(self.params.prediction_length * 1.5),
+            )
+            gscv = ForecastingGridSearchCV(_model, cv=cv, param_grid=self.param_grid, n_jobs=-1)
+            gscv.fit(x)
+            self.model = gscv.best_forecaster_
+        else:
+            self.model = self.create_model()
+            self.model.fit(x)
+
+    def predict(self, hist_df: pd.DataFrame, val_df: pd.DataFrame = None):
+        _df = self.prepare_data(hist_df)
+        self.fit(_df)
+        pred_df = self.model.predict(
+            ForecastingHorizon(np.arange(1, self.params.prediction_length + 1))
+        )
+        freq = self.params.freq
+        if freq == "H":
+            freq = "h"
+        elif freq == "M":
+            freq = "ME"
+        date_idx = pd.date_range(
+            _df.index.max().to_timestamp(freq=self.params.freq) + self.one_ts_offset,
+            _df.index.max().to_timestamp(freq=self.params.freq) + self.prediction_length_offset,
+            freq=freq,
+            name=self.params.date_col,
+        )
+        forecast_df = pd.DataFrame(data=[], index=date_idx).reset_index()
+        forecast_df[self.params.target] = pred_df.y.values
+        forecast_df[self.params.target] = forecast_df[self.params.target].clip(0)
+        return forecast_df, self.model
+
+    def forecast(self, x, spark=None):
+        return self.predict(x)
+
+
+class SKTimeProphet(SKTimeForecastingPipeline):
+    def __init__(self, params):
+        super().__init__(params)
+
+    def create_model(self) -> BaseForecaster:
+        model = Prophet(
+            freq=self.params.freq,
+            growth = self.model_spec.get("growth"),
+            yearly_seasonality=self.model_spec.get("yearly_seasonality"),
+            weekly_seasonality=self.model_spec.get("weekly_seasonality"),
+            daily_seasonality=self.model_spec.get("daily_seasonality"),
+            seasonality_mode=self.model_spec.get("seasonality_mode"),
+        )
+        return model
+
+    def create_param_grid(self):
+        return {
+            "growth": ['linear', 'logarithmic'],
+            "seasonality_mode": ['additive', 'multiplicative'],
+        }

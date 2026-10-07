@@ -10,6 +10,14 @@ MMF integrates a variety of well-established and cutting-edge algorithms, includ
 
 Get started now!
 
+## Build Evidence & Narrative
+
+This repository was built and executed end-to-end on Databricks. For reviewers:
+
+- **[BUILD.md](BUILD.md)** — how the solution was built, the AI-assisted workflow at each stage, and key technical trade-offs (conformal prediction intervals, negative-forecast handling).
+- **[examples/evidence_runner_executed.md](examples/evidence_runner_executed.md)** — the evidence notebook **rendered with its live output cells** (code + real outputs): backtest leaderboard (sMAPE), MLflow run id `83517d0d…`, production scoring, Lakebase PostgreSQL sync status, and a live Genie answer. Captured from a Databricks serverless run on 2026-10-07. (The `.ipynb` / `.html` originals are included too.)
+- **[examples/EVIDENCE.md](examples/EVIDENCE.md)** / **[examples/pipeline_run_log.md](examples/pipeline_run_log.md)** — captured end-to-end outputs across all layers (Lakeflow, Unity Catalog, MLflow, Lakebase, Genie, App).
+
 ## What's New
 
 Use a cluster with [Databricks Runtime 17.3LTS for ML](https://docs.databricks.com/en/release-notes/runtime/17.3lts-ml.html) for local models, and [Databricks Runtime 18.0 for ML](https://docs.databricks.com/en/release-notes/runtime/18.0-ml.html) or later for global and foundation models.

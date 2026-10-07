@@ -5,7 +5,9 @@ command:
 env:
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
-  - name: LAKEBASE_INSTANCE_NAME
-    value: mmf-forecast-serving
+  - name: LAKEBASE_PROJECT_ID
+    value: many-model-forecasting-advanced
   - name: LAKEBASE_DATABASE_NAME
-    value: postgres
+    value: databricks_postgres
+  - name: LAKEBASE_BRANCH
+    value: production

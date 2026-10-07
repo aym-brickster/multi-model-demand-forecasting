@@ -1,20 +1,19 @@
-"""Lakebase (managed PostgreSQL) connection layer for the MMF Dash app.
+"""Lakebase Autoscaling (managed PostgreSQL) connection layer for the MMF Dash app.
 
+Uses the existing project "many-model-forecasting-advanced" on Lakebase Autoscaling.
 Provides low-latency OLTP reads from synced forecast tables instead of
-hitting the SQL warehouse on every request. Falls back to the warehouse
-when Lakebase is not configured.
+hitting the SQL warehouse on every request.
 
-Environment variables (set via app.yaml or Databricks Apps resource):
-  LAKEBASE_INSTANCE_NAME  – Lakebase Provisioned instance name
-  LAKEBASE_DATABASE_NAME  – PostgreSQL database name (default: "postgres")
+Environment variables (set via app.yaml):
+  LAKEBASE_PROJECT_ID     – Lakebase Autoscaling project ID
+  LAKEBASE_DATABASE_NAME  – PostgreSQL database name (default: "databricks_postgres")
+  LAKEBASE_BRANCH         – Branch name (default: "production")
 """
 
 import logging
 import os
 import threading
 import time
-import uuid
-from contextlib import contextmanager
 
 import psycopg
 from databricks.sdk import WorkspaceClient
@@ -23,43 +22,51 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_REFRESH_SECS = 50 * 60  # refresh 10 min before 1-hour expiry
 
+# ── configuration ─────────────────────────────────────────────────────────
+PROJECT_ID = os.getenv("LAKEBASE_PROJECT_ID", "many-model-forecasting-advanced")
+DATABASE_NAME = os.getenv("LAKEBASE_DATABASE_NAME", "databricks_postgres")
+BRANCH = os.getenv("LAKEBASE_BRANCH", "production")
+
 # ── module-level state ────────────────────────────────────────────────────
 _lock = threading.Lock()
 _current_token: str | None = None
 _token_expiry: float = 0.0
-_instance_dns: str | None = None
+_endpoint_host: str | None = None
+_endpoint_name: str | None = None
 _username: str | None = None
-_instance_name: str | None = None
 
 
 def is_configured() -> bool:
-    """Return True if Lakebase env vars are present."""
-    return bool(os.environ.get("LAKEBASE_INSTANCE_NAME"))
+    """Return True if Lakebase project ID is set."""
+    return bool(PROJECT_ID)
 
 
 def _ensure_initialized():
-    """Lazy-init: resolve instance DNS and generate the first token."""
-    global _instance_dns, _username, _current_token, _token_expiry, _instance_name
-    if _instance_dns is not None:
+    """Lazy-init: resolve endpoint host and generate the first token."""
+    global _endpoint_host, _endpoint_name, _username, _current_token, _token_expiry
+    if _endpoint_host is not None:
         return
     with _lock:
-        if _instance_dns is not None:
+        if _endpoint_host is not None:
             return
-        _instance_name = os.environ["LAKEBASE_INSTANCE_NAME"]
         w = WorkspaceClient()
-        inst = w.database.get_database_instance(name=_instance_name)
-        _instance_dns = inst.read_write_dns
+        # Resolve the primary endpoint for the production branch
+        branch_path = f"projects/{PROJECT_ID}/branches/{BRANCH}"
+        endpoints = list(w.postgres.list_endpoints(parent=branch_path))
+        if not endpoints:
+            raise RuntimeError(f"No endpoints found for {branch_path}")
+        ep = endpoints[0]  # primary endpoint
+        _endpoint_name = ep.name
+        _endpoint_host = ep.status.hosts.host
         _username = w.current_user.me().user_name
         _refresh_token()
+        logger.info(f"Lakebase Autoscaling connected: {_endpoint_host}")
 
 
 def _refresh_token():
     global _current_token, _token_expiry
     w = WorkspaceClient()
-    cred = w.database.generate_database_credential(
-        request_id=str(uuid.uuid4()),
-        instance_names=[_instance_name],
-    )
+    cred = w.postgres.generate_database_credential(endpoint=_endpoint_name)
     _current_token = cred.token
     _token_expiry = time.time() + _TOKEN_REFRESH_SECS
     logger.info("Lakebase OAuth token refreshed")
@@ -73,30 +80,28 @@ def _get_token() -> str:
     return _current_token
 
 
-@contextmanager
 def get_connection(database: str | None = None):
-    """Yield a psycopg connection to Lakebase with auto-refreshed token."""
+    """Return a psycopg connection to the Lakebase Autoscaling endpoint."""
     _ensure_initialized()
-    db = database or os.environ.get("LAKEBASE_DATABASE_NAME", "postgres")
-    conn = psycopg.connect(
-        host=_instance_dns,
+    db = database or DATABASE_NAME
+    return psycopg.connect(
+        host=_endpoint_host,
         dbname=db,
         user=_username,
         password=_get_token(),
         sslmode="require",
     )
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
-def query_df(sql: str, database: str | None = None):
-    """Execute a SQL query and return a list of (rows, col_names)."""
+def query_df(sql_query: str, database: str | None = None):
+    """Execute a SQL query and return a pandas DataFrame."""
     import pandas as pd
-    with get_connection(database) as conn:
+    conn = get_connection(database)
+    try:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql_query)
             cols = [d.name for d in cur.description]
             rows = cur.fetchall()
-    return pd.DataFrame(rows, columns=cols)
+        return pd.DataFrame(rows, columns=cols)
+    finally:
+        conn.close()

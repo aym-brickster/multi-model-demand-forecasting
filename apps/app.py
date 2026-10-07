@@ -10,6 +10,13 @@ from dash import Input, Output, State, callback, dash_table, dcc, html
 from databricks import sql
 from databricks.sdk.core import Config
 
+# Lakebase integration — low-latency PostgreSQL serving layer
+try:
+    import lakebase_client
+    LAKEBASE_AVAILABLE = lakebase_client.is_configured()
+except ImportError:
+    LAKEBASE_AVAILABLE = False
+
 DEFAULT_WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", "")
 MAX_ROWS = 10_000
 
@@ -34,7 +41,8 @@ ACTUAL_COLORS = [
 # ---------------------------------------------------------------------------
 
 
-def get_connection(warehouse_id: str):
+def get_warehouse_connection(warehouse_id: str):
+    """Connect to the SQL warehouse (original path)."""
     wid = warehouse_id.strip() or DEFAULT_WAREHOUSE_ID
     if not wid:
         raise ValueError(
@@ -46,6 +54,16 @@ def get_connection(warehouse_id: str):
         http_path=f"/sql/1.0/warehouses/{wid}",
         credentials_provider=lambda: cfg.authenticate,
     )
+
+
+def get_connection(warehouse_id: str):
+    """Return a SQL warehouse connection.
+
+    When Lakebase is configured, the app can use lakebase_client.get_connection()
+    for read queries. This function remains as the warehouse fallback for
+    metadata operations (SHOW TABLES, DESCRIBE) that require Databricks SQL.
+    """
+    return get_warehouse_connection(warehouse_id)
 
 
 def list_tables(catalog: str, schema: str, warehouse_id: str) -> list[str]:
@@ -410,6 +428,16 @@ def fetch_forecast_data(
     ORDER BY eval.`{eval_group}`, eval.`{e_model}`
     LIMIT {MAX_ROWS}
     """
+
+    # Use Lakebase for the heavy data fetch if available
+    if LAKEBASE_AVAILABLE:
+        try:
+            # Adapt query for PostgreSQL: replace backticks with double quotes
+            pg_query = query.replace('`', '"')
+            df = lakebase_client.query_df(pg_query)
+            return df, eval_group, score_date, score_value
+        except Exception:
+            pass  # Fall back to SQL warehouse
 
     conn = get_connection(warehouse_id)
     try:

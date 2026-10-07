@@ -339,6 +339,8 @@ class Forecaster:
                 "forecast",
                 "actual",
                 "model_pickle",
+                "forecast_lower",
+                "forecast_upper",
             ]
         )
         try:

@@ -1,0 +1,117 @@
+# Pipeline Run Log — 2026-10-07 11:56:12 UTC
+
+Automated evidence capture from `examples/evidence_runner` notebook.
+Every output below is a live query result, not mocked.
+
+## 1. Data Ingestion
+- Table: `mmf_demo_aym.m4_advanced.basf_chemicals_train`
+- Rows: **720** | Products: **12** | Range: 2020-01-31 00:00:00 to 2025-03-31 00:00:00
+- Exogenous regressors: feedstock_price_index, plant_utilization_rate, regulatory_compliance
+
+## 2. Unity Catalog Governance
+- Tags applied: **12** across governed tables
+```
+  basf_chemicals_train.data_classification = INTERNAL
+  basf_chemicals_train.domain = customer_demo
+  basf_chemicals_train.grain = monthly
+  basf_chemicals_train.pipeline = mmf-demand-forecast
+  monthly_evaluation_output.data_classification = INTERNAL
+  monthly_evaluation_output.domain = customer_demo
+  monthly_evaluation_output.layer = gold
+  monthly_evaluation_output.pipeline = mmf-demand-forecast
+  monthly_scoring_output.data_classification = INTERNAL
+  monthly_scoring_output.domain = customer_demo
+  monthly_scoring_output.layer = gold
+  monthly_scoring_output.pipeline = mmf-demand-forecast
+```
+- Column comments (basf_chemicals_train):
+```
+  ds: Month-end timestamp (last day of month, UTC)
+  unique_id: BASF product family identifier (e.g. Ultramid_B3S)
+  y: Monthly demand in metric tonnes
+  feedstock_price_index: Feedstock price index (base=100, correlated with crude oil cycles)
+  plant_utilization_rate: Plant utilization rate (0-1), dips during Q2/Q4 turnarounds
+  regulatory_compliance: REACH regulatory compliance flag: 1=compliant, 0=restriction period
+```
+
+## 3. MLflow Training & Evaluation
+- MLflow Run ID: `83517d0d-584f-43f6-b505-a442fccdf763`
+- Total evaluations: **16,830** (17 models × 99 series × 10 windows)
+- Model leaderboard:
+```
+  Model                                         Evals  Avg sMAPE
+  StatsForecastBaselineSeasonalWindowAverage      990        N/A
+  StatsForecastAutoCES                            990   0.061535
+  StatsForecastAutoETS                            990   0.062436
+  StatsForecastAutoArima                          990   0.063498
+  SKTimeProphet                                   990   0.066887
+  StatsForecastAutoTheta                          990   0.068614
+  StatsForecastBaselineSeasonalNaive              990   0.084039
+  StatsForecastAutoTbats                          990   0.084670
+  StatsForecastBaselineWindowAverage              990   0.086238
+  StatsForecastADIDA                              990   0.089077
+  StatsForecastIMAPA                              990   0.089077
+  StatsForecastCrostonOptimized                   990   0.089077
+  StatsForecastTSB                                990   0.090314
+  StatsForecastAutoMfles                          990   0.092313
+  StatsForecastCrostonClassic                     990   0.093315
+  StatsForecastBaselineNaive                      990   0.096275
+  StatsForecastCrostonSBA                         990   0.106822
+```
+
+## 4. Production Scoring
+- Total forecasts: **1,683** across **17** models
+
+## 5. Lakebase Serving Layer
+- Project: many-model-forecasting-advanced
+- Host: `ep-noisy-rain-d1p0244n.database.us-west-2.cloud.databricks.com`
+- Connected: PostgreSQL 17.11 (fcae950) on x86_64-pc-linux-gnu
+- Synced tables:
+  - `lb_m4_monthly_train`: 5,940 rows
+  - `lb_monthly_evaluation_output`: 16,830 rows
+  - `lb_monthly_scoring_output`: 1,683 rows
+- App leaderboard query (top 3):
+```
+  StatsForecastAutoCES: sMAPE=0.061535
+  StatsForecastAutoETS: sMAPE=0.062436
+  StatsForecastAutoArima: sMAPE=0.063498
+```
+- Sync status `lb_monthly_evaluation_output`: **SyncedTableState.SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE**
+- Sync status `lb_monthly_scoring_output`: **SyncedTableState.SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE**
+- Sync status `lb_m4_monthly_train`: **SyncedTableState.SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE**
+
+## 6. Genie Agent
+- Space: MMF Demand Forecasting Intelligence
+- Space ID: `01f1c22c3f621207842ec9d6577c22c7`
+- Question: *Which model has the lowest average sMAPE?*
+- Status: **MessageStatus.COMPLETED**
+- Generated SQL:
+```sql
+WITH model_smape AS (
+  SELECT
+    `model`,
+    AVG(`metric_value`) AS `avg_smape`
+  FROM `mmf_demo_aym`.`m4_advanced`.`monthly_evaluation_output`
+  WHERE `metric_name` IS NOT NULL
+    AND `metric_name` ILIKE '%smape%'
+    AND `model` IS NOT NULL
+    AND `metric_value` IS NOT NULL
+  GROUP BY `model`
+), ranked_models AS (
+  SELECT
+    `model`,
+    `avg_smape`,
+    RANK() OVER (ORDER BY `avg_smape` ASC) AS `smape_rank`
+  FROM model_smape
+)
+SELECT
+  `model`,
+  `avg_smape`
+FROM ranked_models
+WHERE `smape_rank` <= 1
+ORDER BY `avg_smape` ASC, `model` ASC
+```
+- Answer: The model with the **lowest average sMAPE** across all time series is **StatsForecastAutoCES**, with an average sMAPE of **0.061535488464333266**. Based on the single top-ranked result returned, **StatsForecastAutoCES** is the best-performing model on this measure in the data queried.
+
+---
+*Generated by `examples/evidence_runner` at 2026-10-07 11:56:12 UTC*

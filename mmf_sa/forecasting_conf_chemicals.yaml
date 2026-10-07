@@ -1,0 +1,50 @@
+# Forecasting configuration for BASF chemicals demand data
+# Uses external regressors: feedstock_price_index, plant_utilization_rate, regulatory_compliance
+#
+# Run with:
+#   mmf_sa.run_forecast(
+#       spark=spark,
+#       conf=OmegaConf.load("mmf_sa/forecasting_conf_chemicals.yaml"),
+#       ...
+#   )
+
+catalog: mmf_demo_aym
+db: m4_advanced
+freq: M
+prediction_length: 6
+backtest_length: 24
+stride: 3
+metric: smape
+
+train_data: basf_chemicals_train
+scoring_data: basf_chemicals_scoring
+scoring_output: basf_chemicals_scoring_output
+evaluation_output: basf_chemicals_evaluation_output
+
+group_id: unique_id
+date_col: ds
+target: y
+
+# External regressors (chemicals-domain features)
+dynamic_reals:
+  - feedstock_price_index
+  - plant_utilization_rate
+dynamic_categoricals:
+  - regulatory_compliance
+
+# Prediction intervals (hybrid: native where available, conformal fallback)
+prediction_interval_level: 0.95
+
+# Allow negative values in demand (some products may have returns/credits)
+allow_negative_values: false
+
+# Active models — subset for chemicals use case
+active_models:
+  - StatsForecastAutoArima
+  - StatsForecastAutoETS
+  - StatsForecastAutoTheta
+  - NeuralForecastAutoNHITS
+  - NeuralForecastAutoTFT    # TFT supports exogenous regressors natively
+  - SKTimeProphet
+  - ChronosBoltBase
+  - TimesFM_2_5_200m

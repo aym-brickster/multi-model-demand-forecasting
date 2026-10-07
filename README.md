@@ -334,3 +334,78 @@ Any issues discovered through the use of this project should be filed as GitHub 
 | TimesFM          | A pretrained time-series foundation model developed by Google Research for time-series forecasting | Apache 2.0   | [https://github.com/google-research/timesfm](https://github.com/google-research/timesfm)                       |
 
 
+
+
+---
+
+## End-to-End Architecture
+
+This repository implements the complete journey from raw demand data to a business-user-facing conversational surface:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Data Sources                                        │
+│  M4 competition data   │   BASF chemicals synthetic data              │
+│  (m4_monthly_train)    │   (basf_chemicals_train + exogenous regs)    │
+└────────────┬───────────┴───────────────┬──────────────────────────────┘
+             │                           │
+             ▼                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Lakeflow Spark Declarative Pipeline                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐     │
+│  │ Data Quality  │→│  MMF Engine   │→│  MLflow Model Registry    │     │
+│  │ Checks       │  │  17+ Models   │  │  (UC-registered models)  │     │
+│  └──────────────┘  └──────────────┘  └──────────────────────────┘     │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Unity Catalog (mmf_demo_aym.m4_advanced)                              │
+│  ┌────────────────────────┐  ┌────────────────────────┐               │
+│  │ monthly_evaluation_    │  │ monthly_scoring_        │               │
+│  │ output (backtest +     │  │ output (production      │               │
+│  │ prediction intervals)  │  │ forecasts + intervals)  │               │
+│  └───────────┬────────────┘  └───────────┬────────────┘               │
+└──────────────┼───────────────────────────┼──────────────────────────────┘
+               │                           │
+               ▼                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Lakebase Autoscaling (many-model-forecasting-advanced)                │
+│  PostgreSQL 17 · 2-4 CU · Synced tables (reverse ETL)                 │
+│  ┌────────────────────────┐  ┌────────────────────────┐               │
+│  │ lb_monthly_evaluation_ │  │ lb_monthly_scoring_    │               │
+│  │ output (16,830 rows)   │  │ output (1,683 rows)    │               │
+│  └───────────┬────────────┘  └───────────┬────────────┘               │
+└──────────────┼───────────────────────────┼──────────────────────────────┘
+               │                           │
+       ┌───────┴───────────────────────────┴───────┐
+       │                                           │
+       ▼                                           ▼
+┌──────────────────────┐          ┌─────────────────────────────────────┐
+│  Dash App (apps/)    │          │  Genie Agent                        │
+│  Interactive plots,  │          │  "MMF Demand Forecasting            │
+│  model comparison,   │          │   Intelligence"                     │
+│  forecast explorer   │          │  Natural-language Q&A over          │
+│  Low-latency via     │          │  forecast tables for business       │
+│  Lakebase PostgreSQL │          │  stakeholders                       │
+└──────────────────────┘          └─────────────────────────────────────┘
+```
+
+### Key Capabilities
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Data Pipeline** | Lakeflow SDP + MMF engine | Ingest, validate, train 17+ models, backtest |
+| **Governance** | Unity Catalog | Schema management, lineage, access control |
+| **Model Registry** | MLflow + UC | Versioned model artifacts, experiment tracking |
+| **Serving Layer** | Lakebase Autoscaling | Low-latency PostgreSQL for app reads (synced tables) |
+| **Application** | Dash + Plotly | Interactive forecast explorer with prediction intervals |
+| **Conversational AI** | Genie Agent | Business-user natural-language demand queries |
+
+### BASF Chemicals Domain Extension
+
+The pipeline extends beyond the vanilla M4 competition data with a **chemicals-specific** configuration:
+- 12 synthetic chemical product families (Ultramid, Lupranate, Pluracol, Hysorb, etc.)
+- Domain exogenous regressors: feedstock price index, plant utilization rate, REACH regulatory compliance
+- Seasonal patterns reflecting real plant turnaround cycles (Q2/Q4 maintenance dips)
+- Dedicated config: `mmf_sa/forecasting_conf_chemicals.yaml`

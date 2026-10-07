@@ -1,0 +1,86 @@
+{
+  "timestamp": "2026-10-07T15:30:00Z",
+  "workspace": "e2-demo-field-eng.cloud.databricks.com",
+  "catalog": "mmf_demo_aym",
+  "schema": "m4_advanced",
+  "basf_chemicals": {
+    "table": "mmf_demo_aym.m4_advanced.basf_chemicals_train",
+    "rows": 720,
+    "products": 12,
+    "date_range": [
+      "2020-01-31",
+      "2024-12-31"
+    ],
+    "exogenous_regressors": [
+      "feedstock_price_index",
+      "plant_utilization_rate",
+      "regulatory_compliance"
+    ],
+    "config": "mmf_sa/forecasting_conf_chemicals.yaml"
+  },
+  "lakebase": {
+    "project": "many-model-forecasting-advanced",
+    "endpoint": "projects/many-model-forecasting-advanced/branches/production/endpoints/primary",
+    "host": "ep-noisy-rain-d1p0244n.database.us-west-2.cloud.databricks.com",
+    "postgres_version": "PostgreSQL 17.11",
+    "synced_tables": {
+      "lb_monthly_evaluation_output": {
+        "rows": 16830,
+        "status": "SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE"
+      },
+      "lb_monthly_scoring_output": {
+        "rows": 1683,
+        "status": "SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE"
+      },
+      "lb_m4_monthly_train": {
+        "rows": 5940,
+        "status": "SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE"
+      }
+    }
+  },
+  "mlflow": {
+    "run_id": "83517d0d-584f-43f6-b505-a442fccdf763",
+    "models_evaluated": 17,
+    "time_series": 99,
+    "backtest_windows": 10,
+    "total_evaluations": 16830,
+    "scoring_forecasts": 1683,
+    "best_model": "StatsForecastAutoCES",
+    "best_avg_smape": 0.061535
+  },
+  "genie_agent": {
+    "space_id": "01f1c22c3f621207842ec9d6577c22c7",
+    "space_name": "MMF Demand Forecasting Intelligence",
+    "tables": [
+      "mmf_demo_aym.m4_advanced.monthly_scoring_output",
+      "mmf_demo_aym.m4_advanced.monthly_evaluation_output",
+      "mmf_demo_aym.m4_advanced.m4_monthly_train"
+    ],
+    "conversations": [
+      {
+        "question": "Which model has the lowest average sMAPE across all time series?",
+        "status": "MessageStatus.COMPLETED",
+        "sql": "WITH model_avg AS (\n  SELECT\n    `model`,\n    AVG(`metric_value`) AS `avg_smape`\n  FROM `mmf_demo_aym`.`m4_advanced`.`monthly_evaluation_output`\n  WHERE `metric_name` ILIKE '%smape%'\n    AND `model` IS NOT NULL\n    AND `metric_value` IS NOT NULL\n  GROUP BY `model`\n), ranked AS (\n  SELECT\n    `model`,\n    `avg_smape`,\n    RANK() OVER (ORDER BY `avg_smape` ASC) AS `rnk`\n  FROM model_avg\n)\nSELECT\n  `model`,\n  `avg_smape`\nFROM ranked\nWHERE `rnk` <= 1\nORDER BY `avg_smape` ASC, `model` ASC",
+        "answer": "The model with the **lowest average sMAPE** across all time series is **StatsForecastAutoCES**, with an average sMAPE of **0.061535488464333266**. Based on the ranked result, **StatsForecastAutoCES** is the top-performing model on this accuracy measure in the available data."
+      },
+      {
+        "question": "Compare the top 5 models for time series M1 by average metric value",
+        "status": "MessageStatus.COMPLETED",
+        "sql": "WITH model_metric_avg AS ( SELECT `metric_name`, `model`, AVG(`metric_value`) AS `avg_metric_value` FROM `mmf_demo_aym`.`m4_advanced`.`monthly_evaluation_output` WHERE `unique_id` LIKE 'M1%' AND `model` IS NOT NULL AND `metric_name` IS NOT NULL AND `metric_value` IS NOT NULL GROUP BY `metric_name`, `model` ), ranked_models AS ( SELECT `metric_name`, `model`, `avg_metric_value`, RANK() OVER (PARTITION BY `metric_name` ORDER BY `avg_metric_value` DESC) AS `model_rank` FROM model_metric_avg ) SELECT `metric_name`, `model`, `avg_metric_value`, `model_rank` FROM ranked_models WHERE `model_rank` <= 5 ORDER BY `metric_name`, `model_rank`, `model`",
+        "answer": "For time series **M1**, the top 5 models by average metric value for **smape** are ranked from highest to lowest as:\n- **StatsForecastCrostonSBA** \u2014 **0.0994**\n- **StatsForecastCrostonClassic** \u2014 **0.0771**\n- **StatsForecastTSB** \u2014 **0.0742**\n- **StatsForecastBaselineNaive** \u2014 **0.0741**\n- **StatsForecastAutoMfles** \u2014 **0.0726**\nThe leading model, **StatsForecastCrostonSBA**, is noticeably ahead of the other four, which are clustered closely between **0.0726** and **0.0771**."
+      },
+      {
+        "question": "How many unique time series are in the training data and what is the date range?",
+        "status": "MessageStatus.COMPLETED",
+        "sql": "SELECT COUNT(DISTINCT `unique_id`) AS `unique_time_series`, MIN(`ds`) AS `start_date`, MAX(`ds`) AS `end_date`\nFROM `mmf_demo_aym`.`m4_advanced`.`m4_monthly_train`\nWHERE `unique_id` IS NOT NULL AND `ds` IS NOT NULL",
+        "answer": "The training data contains **99** unique time series, with dates ranging from **2018-01-31** to **2022-12-31**. Based on the full result shown, the training period spans just under **5 years**."
+      },
+      {
+        "question": "What percentage of models have non-empty prediction intervals in the scoring output?",
+        "status": "MessageStatus.COMPLETED",
+        "sql": "SELECT try_divide(100.0 * SUM(CASE WHEN `forecast_lower` IS NOT NULL AND `forecast_upper` IS NOT NULL AND size(`forecast_lower`) > 0 AND size(`forecast_upper`) > 0 THEN 1 ELSE 0 END),COUNT(*)) AS `percentage_with_non_empty_prediction_intervals`\nFROM `mmf_demo_aym`.`m4_advanced`.`monthly_scoring_output`",
+        "answer": "**0.00%** of models in `monthly_scoring_output` have non-empty prediction intervals in the scoring output, based on `percentage_with_non_empty_prediction_intervals = 0.00000000000000`. This means **no models** in the result set have both `forecast_lower` and `forecast_upper` populated with non-empty values."
+      }
+    ]
+  }
+}
